@@ -10,7 +10,7 @@ The top row of every block is empty, so a block falling down one pixel erases it
 
 Besides the seven classic pieces there are some extra ones: a single block, a three-block bar and a "^" made of three blocks that only touch at their corners. A cross is defined too, but it never appears: when it is chosen, the program immediately picks another piece.
 
-The intro lets pieces fall down to form the word "TETRIS". When you press fire, the screen "melts":
+The intro lets pieces fall down to form the word "TETRIS". Until you press fire, the screen "melts":
 random rows and columns are shifted pixel by pixel.
 
 ![Intro](images/title.png)
