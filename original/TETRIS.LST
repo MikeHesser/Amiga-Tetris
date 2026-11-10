@@ -1,0 +1,466 @@
+'
+'                               T E T R I S
+'                    Copyright (c) 1989 by Mike Hesser
+'                               Oktober `89
+'
+OPTION BASE 0
+DEFINT "a-z"
+OPENS 1,0,0,320,256,5,0
+OPENW #1,0,0,320,256,0,2048+4096
+TITLEW #1,""
+CLEARW #1
+INLINE adr%,350
+rp%=WINDOW(1)+84
+screen%=LPEEK(LPEEK(rp%+4)+8)
+GOSUB varinit
+GOSUB colinit
+GOSUB vorspann
+DO
+  GOSUB fieldinit
+  GOSUB playfield
+  GOSUB game
+  GOSUB again
+  ERASE field|()
+LOOP UNTIL f!=FALSE
+END
+'
+> PROCEDURE vorspann
+  SETCOLOR 0,0,0,0
+  RESTORE tetris
+  FOR n%=1 TO 16
+    READ nr|,w|,x|,y
+    SETCOLOR 1,15,15,15
+    a%=V:f|(((f|(1,nr|)*2)+3)*w|+2,nr|)
+    f|=RAND(3)+1
+    FOR y|=1 TO SUCC(y)*8+48
+      figure(x|+9,y|,f|,a%)
+    NEXT y|
+  NEXT n%
+  a$="Copyright (C) 1989 by MH"
+  FOR n%=1 TO LEN(a$)
+    FOR a%=320 TO n%*8+56 STEP -4
+      TEXT a%,136,MID$(a$,n%,1)+" "
+    NEXT a%
+  NEXT n%
+  COLOR 2
+  TEXT 88,248,"PRESS FIRE TO PLAY"
+  GOSUB schmelze
+RETURN
+> PROCEDURE colinit
+  SETCOLOR 0,0,0,9
+  SETCOLOR 1,15,15,15
+  '
+  SETCOLOR 2,7,7,15
+  SETCOLOR 3,0,0,14
+  SETCOLOR 4,11,11,15
+  '
+  SETCOLOR 5,2,13,3
+  SETCOLOR 6,0,9,0
+  SETCOLOR 7,10,14,9
+  '
+  SETCOLOR 8,15,6,10
+  SETCOLOR 9,12,0,8
+  SETCOLOR 10,15,9,14
+  '
+  SETCOLOR 11,13,13,0
+  SETCOLOR 12,12,11,0
+  SETCOLOR 13,15,15,0
+  '
+  SETCOLOR 14,13,4,0
+  SETCOLOR 15,10,2,0
+  '
+  SETCOLOR 16,12,12,12
+  SETCOLOR 17,15,15,15
+  SETCOLOR 18,7,7,7
+  '
+  SETCOLOR 19,6,0,6
+  SETCOLOR 20,8,0,8
+  SETCOLOR 21,10,0,10
+  SETCOLOR 22,12,0,12
+RETURN
+> PROCEDURE daten
+  tetris:
+  DATA 2,0,1,1, 8,0,0,0, 8,0,4,4, 3,1,4,1, 8,0,4,0, 8,1,9,2, 3,2,8,0
+  DATA 4,0,12,2, 1,0,15,4, 9,3,14,1, 5,3,12,0, 2,0,17,1, 1,0,17,0
+  DATA 5,1,19,3, 4,3,19,1, 8,0,19,0
+  '
+  ' Daten der einzelnen Figuren
+  ' Aufbau:
+  '           Anzahl Rotationsmöglichkeiten
+  '           Anzahl der Quadrate (Koordinaten)
+  '           x-Ausmaß
+  '           y-Ausmaß
+  '           Liste der einzelnen Quadratskoordinaten (x(0-),y(0-))
+  '
+  figuren:
+  DATA 11
+  ' **
+  ' **
+  DATA 1,4
+  DATA 2,2, 0,0,1,0,0,1,1,1,255
+  ' *
+  DATA 1,1
+  DATA 1,1,0,0,255
+  ' *****
+  DATA 2,4
+  DATA 1,4, 0,0,0,1,0,2,0,3,255
+  DATA 4,1, 0,0,1,0,2,0,3,0,255
+  '  *
+  ' ***
+  DATA 4,4
+  DATA 3,2, 1,0,0,1,1,1,2,1,255
+  DATA 2,3, 0,0,0,1,1,1,0,2,255
+  DATA 3,2, 0,0,1,0,2,0,1,1,255
+  DATA 2,3, 1,0,0,1,1,1,1,2,255
+  ' **
+  ' *
+  ' *
+  DATA 4,4
+  DATA 2,3, 0,0,1,0,0,1,0,2,255
+  DATA 3,2, 0,0,1,0,2,0,2,1,255
+  DATA 2,3, 1,0,1,1,0,2,1,2,255
+  DATA 3,2, 0,0,0,1,1,1,2,1,255
+  ' **
+  '  *
+  '  *
+  DATA 4,4
+  DATA 2,3, 0,0,1,0,1,1,1,2,255
+  DATA 3,2, 2,0,0,1,1,1,2,1,255
+  DATA 2,3, 0,0,0,1,0,2,1,2,255
+  DATA 3,2, 0,0,1,0,2,0,0,1,255
+  ' **
+  '  **
+  DATA 2,4
+  DATA 3,2, 0,0,1,0,1,1,2,1,255
+  DATA 2,3, 1,0,0,1,1,1,0,2,255
+  '  **
+  ' **
+  DATA 2,4
+  DATA 3,2, 1,0,2,0,0,1,1,1,255
+  DATA 2,3, 0,0,0,1,1,1,1,2,255
+  '
+  ' ***
+  DATA 2,3
+  DATA 3,1, 0,0,1,0,2,0,255
+  DATA 1,3, 0,0,0,1,0,2,255
+  '  *
+  ' * *
+  DATA 4,3
+  DATA 3,2, 1,0,0,1,2,1,255
+  DATA 2,3, 0,0,1,1,0,2,255
+  DATA 3,2, 0,0,1,1,2,0,255
+  DATA 2,3, 1,0,0,1,1,2,255
+  '  *
+  ' * *
+  '  *
+  DATA 1,4
+  DATA 3,3, 1,0,0,1,2,1,1,2,255
+RETURN
+> PROCEDURE varinit
+  RESTORE figuren
+  READ a|
+  '
+  DIM f|(46,a|)
+  DIM high$(9),high%(9)
+  IF NOT EXIST("TetrisH.dat")
+    OPEN "o",#1,"TetrisH.dat"
+    FOR n%=0 TO 9
+      PRINT #1,"EAGLE SOFT"
+      PRINT #1,(10-n%)*1000
+    NEXT n%
+    CLOSE #1
+  ENDIF
+  OPEN "i",#1,"TetrisH.dat"
+  FOR n%=0 TO 9
+    INPUT #1,high$(n%)
+    INPUT #1,high%(n%)
+  NEXT n%
+  CLOSE #1
+  br|=12
+  he|=27
+  xp|=12
+  '
+  FOR n|=0 TO a|-1
+    READ x|,y|
+    f|(0,n|)=x|
+    f|(1,n|)=y|
+    FOR b|=0 TO x|-1
+      FOR a|=0 TO y|*2+2
+        READ f|(a|+2+b|*(y|*2+3),n|)
+      NEXT a|
+    NEXT b|
+  NEXT n|
+RETURN
+> PROCEDURE figure(x&,y&,farbe&,pointer%)
+  ~C:adr%(W:x&,W:y&,W:farbe&,L:pointer%,L:screen%)
+RETURN
+> PROCEDURE playfield
+  SETCOLOR 0,0,0,9
+  pa|=0
+  WHILE pa|<1 OR pa|>10
+    CLEARW #1
+    LOCATE 7,14
+    COLOR 1
+    INPUT "Geschwindigkeit:(1-10)";pa|
+  WEND
+  CLEARW #1
+  DEFFILL 3,2,23
+  PBOX 0,0,320,256
+  DEFFILL 0,1
+  FOR n%=0 TO he|-1
+    block(xp|,n%)
+    block(xp|+br|+1,n%)
+  NEXT n%
+  FOR n%=xp| TO xp|+br|+1
+    block(n%,he|)
+  NEXT n%
+  COLOR 0
+  PBOX xp|*8+8,0,(xp|+br|)*8+7,he|*8-1
+  LOCATE 4,8
+  rahmen(8,53,70,40)
+  PRINT "SCORE"
+  COLOR 1
+  TEXT 20,81,"000000"
+  rahmen(8,140,70,40)
+  TEXT 28,157,"HIGH"
+  GOSUB zahl(high%(0))
+  TEXT 20,167,a$
+  rahmen(222,35,90,160)
+  PRINT AT(32,6);"FIRE"
+  PRINT AT(31,7);"ROTATE"
+  PRINT AT(30,11);"JOY RIGHT"
+  PRINT AT(32,12);"RIGHT"
+  PRINT AT(30,16);"JOY LEFT"
+  PRINT AT(32,17);"LEFT"
+  PRINT AT(33,21);"`P`"
+  PRINT AT(32,22);"PAUSE"
+RETURN
+> PROCEDURE block(x&,y&)
+  MUL x&,8
+  MUL y&,8
+  COLOR 16
+  PBOX x&,y&,x&+7,y&+7
+  COLOR 17
+  DRAW x&,y&+7 TO x&,y& TO x&+7,y&
+  COLOR 18
+  DRAW x&,y&+7 TO x&+7,y&+7 TO x&+7,y&
+RETURN
+> PROCEDURE game
+  score=0
+  sh|=0
+  DO
+    y|=0
+    f|=RAND(11)
+    IF f|=10
+      f|=RAND(10)
+      INC sh|
+      IF sh|=3
+        sh|=0
+      ENDIF
+    ENDIF
+    x|=RAND(br|)+1
+    col|=RAND(4)+1
+    rot|=f|(0,f|)
+    q|=f|(1,f|)*2
+    a%=V:f|(2,f|)
+    w|=0
+    IF @test(0,0)=TRUE
+      x|=1
+      f1!=FALSE
+      FOR b%=0 TO br|-PEEK(a%)-1
+        IF f1!=FALSE
+          IF @test(b%,0)=FALSE
+            x|=b%+1
+            f1!=TRUE
+          ENDIF
+        ENDIF
+      NEXT b%
+    ENDIF
+    EXIT IF @test(0,0)=TRUE
+    DO
+      IF UPPER$(INKEY$)="P"
+        WHILE INKEY$=""
+        WEND
+      ENDIF
+      EXIT IF @test(0,1)=TRUE
+      FOR n%=1 TO 8
+        FOR wa|=1 TO pa|
+          a=SIN(1)
+        NEXT wa|
+        figure(x|+xp|,y|,col|,a%)
+        INC y|
+      NEXT n%
+      s|=STICK(1)
+      IF s|=4 AND x|>1
+        IF @test(-1,0)=FALSE
+          figure(x|+xp|,y|,0,a%)
+          DEC x|
+        ENDIF
+      ENDIF
+      IF s|=8 AND x|+PEEK(a%)<SUCC(br|)
+        IF @test(1,0)=FALSE
+          figure(x|+xp|,y|,0,a%)
+          INC x|
+        ENDIF
+      ENDIF
+      IF STRIG(1)=TRUE
+        figure(x|+xp|,y|,0,a%)
+        INC w|
+        w|=w| MOD rot|
+        b%=a%
+        a%=V:f|((SHL(f|(1,f|),1)+3)*w|+2,f|)
+        IF @test(0,0)=TRUE
+          a%=b%
+        ENDIF
+      ENDIF
+    LOOP
+    ADD score,10
+    FOR n%=0 TO q|-1 STEP 2
+      field|(x|+PEEK(a%+2+n%)-1,SHR(y|,3)+PEEK(a%+3+n%))=1
+    NEXT n%
+    figure(x|+xp|,y|,col|,a%)
+    FOR n%=PRED(he|) DOWNTO 0
+      f!=TRUE
+      FOR x%=0 TO PRED(br|)
+        IF field|(x%,n%)=0
+          f!=FALSE
+        ENDIF
+      NEXT x%
+      IF f!=TRUE
+        ADD score,100
+        FOR b%=1 TO 8
+          SCROLL 0,1,xp|*8+8,0,(xp|+br|)*8+7,n%*8+7
+        NEXT b%
+        FOR b%=n% DOWNTO 1
+          FOR x%=0 TO PRED(br|)
+            field|(x%,b%)=field|(x%,b%-1)
+          NEXT x%
+        NEXT b%
+        INC n%
+      ENDIF
+    NEXT n%
+    GOSUB zahl(score)
+    TEXT 20,81,a$
+  LOOP
+  '
+  '  AUS
+  '
+  FOR n%=he|/2 TO he|/2+2
+    LOCATE xp|+2,n%
+    PRINT SPACE$(br|)
+  NEXT n%
+  LOCATE xp|+2,n%-2
+  PRINT "    ENDE"
+  GOSUB schmelze
+  IF score>high%(9)
+    f!=FALSE
+    FOR n%=0 TO 9
+      IF f!=FALSE
+        IF score>=high%(n%)
+          pos=n%
+          INSERT high%(pos)=score
+          f!=TRUE
+        ENDIF
+      ENDIF
+    NEXT n%
+    CLEARW #1
+    LOCATE 9,13
+    PRINT "Your Name:";
+    FORM INPUT 10,a$
+    IF a$=""
+      a$="Mr.X"
+    ENDIF
+    INSERT high$(pos)=a$
+    OPEN "o",#1,"TetrisH.dat"
+    FOR n%=0 TO 9
+      PRINT #1,high$(n%)
+      PRINT #1,high%(n%)
+    NEXT n%
+    CLOSE #1
+  ENDIF
+  GOSUB hightab
+  DELAY 2
+  GOSUB schmelze
+RETURN
+> PROCEDURE schmelze
+  DELAY 2
+  DO
+    x&=RAND(40)
+    y&=RAND(32)
+    IF RND>0.5
+      r=1
+    ELSE
+      r=-1
+    ENDIF
+    FOR n%=1 TO 8
+      SCROLL r,0,0,y&*8,320,y&*8+7
+      SCROLL 0,r,x&*8,0,x&*8+7,256
+    NEXT n%
+    EXIT IF STRIG(1)
+  LOOP
+RETURN
+> PROCEDURE rahmen(x&,y&,b&,h&)
+  f=19
+  st=1
+  COLOR 0
+  PRBOX x&,y&,b&+x&,h&+y&
+  FOR n%=0 TO 6
+    COLOR f
+    PRBOX x&+n%,y&+n%,x&+b&-n%,y&+h&-n%
+    ADD f,st
+    IF f=22 OR f=19
+      st=-st
+    ENDIF
+  NEXT n%
+  COLOR 0
+  PRBOX x&+6,y&+6,x&+b&-6,y&+h&-6
+  COLOR 1
+RETURN
+> PROCEDURE hightab
+  CLEARW #1
+  SETCOLOR 0,0,0,0
+  PRINT AT(13,4);"TODAY`S TOP TEN"
+  FOR n%=0 TO 9
+    LOCATE 9,n%*2+6
+    GOSUB zahl(high%(n%))
+    PRINT high$(n%);STRING$(16-LEN(high$(n%)),".");a$
+  NEXT n%
+RETURN
+> PROCEDURE zahl(z%)
+  a$="000000"
+  b$=STR$(z%)
+  MID$(a$,7-LEN(b$))=b$
+RETURN
+> PROCEDURE again
+  CLEARW #1
+  PRINT AT(14,13);"AGAIN (Y/N)"
+  a$=""
+  WHILE a$=""
+    a$=INKEY$
+  WEND
+  IF UPPER$(a$)="Y"
+    f!=TRUE
+  ELSE
+    f!=FALSE
+  ENDIF
+RETURN
+> PROCEDURE fieldinit
+  DIM field|(br|-1,he|)
+  FOR n%=0 TO br|-1
+    field|(n%,he|)=1
+  NEXT n%
+RETURN
+FUNCTION test(offx&,offy&)
+  IF PEEK(a%)+x|>(br|+1)
+    x|=br|-PEEK(a%)+1
+  ENDIF
+  f!=FALSE
+  FOR n%=0 TO q|-1 STEP 2
+    IF f!=FALSE
+      IF field|(x|+PEEK(a%+2+n%)+offx&-1,SHR(y|,3)+PEEK(a%+3+n%)+offy&)=1
+        f!=TRUE
+      ENDIF
+    ENDIF
+  NEXT n%
+RETURN f!
+ENDFUNC

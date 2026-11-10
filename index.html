@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tetris 1989</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=block">
+<style>
+  :root { --bg:#111; --fg:#bbb; --dim:#777; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:0 16px; box-sizing:border-box; }
+  canvas { image-rendering:pixelated; image-rendering:crisp-edges; display:block;
+    box-shadow:0 0 0 2px #333, 0 10px 40px #000; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #hint { color:var(--dim); text-align:center; max-width:960px; }
+  #hint kbd { border:1px solid #444; border-radius:3px; padding:0 4px; color:var(--fg); }
+  #textinput { position:fixed; left:0; bottom:0; width:1px; height:1px; opacity:0; font-size:16px; border:0; padding:0; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="320" height="256"></canvas>
+<div id="hint">Tetris (GFA-BASIC, Amiga, 1989) · Joystick: <kbd>←</kbd> <kbd>→</kbd> ·
+  Feuer / Drehen: <kbd>Leertaste</kbd> oder <kbd>↑</kbd> · Pause: <kbd>P</kbd> ·
+  Touch: links / rechts / Mitte tippen</div>
+<input id="textinput" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text">
+<script>
+'use strict';
+/* =====================================================================
+   Mini-GFA-Grafikschicht: 320x256, 5 Bitplanes = 32 Farben (Amiga-Palette)
+   ===================================================================== */
+const W = 320, H = 256;
+const cv = document.getElementById('screen');
+const ctx = cv.getContext('2d');
+const fb = new Uint8Array(W * H);
+const pal = Array.from({ length: 32 }, () => [0, 0, 0]);
+let dirty = true, pen = 1, fillCol = 1, fillPat = null;
+
+function setcolor(i, r, g, b) { pal[i] = [r, g, b]; dirty = true; }
+function plot(x, y, c) {
+  x |= 0; y |= 0;
+  if (x >= 0 && x < W && y >= 0 && y < H) { fb[y * W + x] = c; dirty = true; }
+}
+function line(x0, y0, x1, y1, c) {
+  x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0;
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy;
+  for (;;) {
+    plot(x0, y0, c);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+function draw(c, ...p) { for (let i = 2; i < p.length; i += 2) line(p[i - 2], p[i - 1], p[i], p[i + 1], c); }
+// PBOX nutzt die mit DEFFILL/COLOR gesetzte Füllung (optional mit Muster)
+function pbox(x0, y0, x1, y1, c = pen, pat = null) {
+  if (x0 > x1) [x0, x1] = [x1, x0];
+  if (y0 > y1) [y0, y1] = [y1, y0];
+  x0 = Math.max(0, x0 | 0); y0 = Math.max(0, y0 | 0);
+  x1 = Math.min(W - 1, x1 | 0); y1 = Math.min(H - 1, y1 | 0);
+  for (let y = y0; y <= y1; y++) {
+    if (!pat) { fb.fill(c, y * W + x0, y * W + x1 + 1); continue; }
+    const row = pat[y & 7];
+    for (let x = x0; x <= x1; x++) fb[y * W + x] = (row >> (7 - (x & 7))) & 1 ? c : 0;
+  }
+  dirty = true;
+}
+function prbox(x0, y0, x1, y1, c) {      // gefüllte Box mit runden Ecken
+  const r = Math.min(4, (x1 - x0) >> 1, (y1 - y0) >> 1);
+  for (let y = y0; y <= y1; y++) {
+    const d = Math.min(y - y0, y1 - y);
+    const inset = d < r ? Math.round(r - Math.sqrt(r * r - (r - d) * (r - d))) : 0;
+    pbox(x0 + inset, y, x1 - inset, y, c);
+  }
+}
+// SCROLL dx,dy,x1,y1,x2,y2 – verschiebt den Inhalt des Rechtecks, frei werdende Pixel = Farbe 0
+function scroll(dx, dy, x1, y1, x2, y2) {
+  x1 = Math.max(0, x1); y1 = Math.max(0, y1); x2 = Math.min(W - 1, x2); y2 = Math.min(H - 1, y2);
+  const w = x2 - x1 + 1, h = y2 - y1 + 1;
+  const tmp = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) tmp.set(fb.subarray((y1 + y) * W + x1, (y1 + y) * W + x2 + 1), y * w);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const sx = x - dx, sy = y - dy;
+    fb[(y1 + y) * W + x1 + x] = (sx >= 0 && sx < w && sy >= 0 && sy < h) ? tmp[sy * w + sx] : 0;
+  }
+  dirty = true;
+}
+
+/* ---------- Text: TEXT x,y (Grundlinie), PRINT / LOCATE (8x8-Zellen) ---------- */
+const gcan = document.createElement('canvas'); gcan.width = 8; gcan.height = 16;
+const gctx = gcan.getContext('2d', { willReadFrequently: true });
+let FONT = '8px "Press Start 2P"';
+const glyphs = new Map();
+let capBottom = 12;
+function glyph(ch) {
+  let g = glyphs.get(ch);
+  if (g) return g;
+  gctx.clearRect(0, 0, 8, 16);
+  gctx.font = FONT; gctx.fillStyle = '#fff'; gctx.textBaseline = 'alphabetic';
+  gctx.fillText(ch, 0, 12);
+  const id = gctx.getImageData(0, 0, 8, 16).data;
+  g = new Uint8Array(128);
+  for (let i = 0; i < 128; i++) g[i] = id[i * 4 + 3] >= 128 ? 1 : 0;
+  glyphs.set(ch, g);
+  return g;
+}
+function calibrateFont() {
+  glyphs.clear();
+  const g = glyph('H');
+  for (let r = 15; r >= 0; r--) if (g.subarray(r * 8, r * 8 + 8).some(v => v)) { capBottom = r; break; }
+}
+function text(x, y, s, c = pen) {          // JAM2: Hintergrund in Farbe 0
+  s = String(s);
+  pbox(x, y - 6, x + s.length * 8 - 1, y + 1, 0);
+  for (let i = 0; i < s.length; i++) {
+    const g = glyph(s[i]);
+    for (let r = 0; r < 16; r++) for (let q = 0; q < 8; q++)
+      if (g[r * 8 + q]) plot(x + i * 8 + q, y + r - capBottom, c);
+  }
+}
+let curCol = 1, curRow = 1;
+const locate = (c, r) => { curCol = c; curRow = r; };
+function print(s, newline = true) {
+  s = String(s);
+  text((curCol - 1) * 8, (curRow - 1) * 8 + 6, s);
+  if (newline) { curCol = 1; curRow++; } else curCol += s.length;
+}
+const printAt = (c, r, s) => { locate(c, r); print(s); };
+function clearw() { fb.fill(0); dirty = true; locate(1, 1); }
+
+/* ---------- Ausgabe ---------- */
+const img = ctx.createImageData(W, H);
+function render() {
+  if (dirty) {
+    dirty = false;
+    const lut = pal.map(([r, g, b]) => [r * 17, g * 17, b * 17]);
+    const d = img.data;
+    for (let i = 0, j = 0; i < fb.length; i++, j += 4) {
+      const p = lut[fb[i]]; d[j] = p[0]; d[j + 1] = p[1]; d[j + 2] = p[2]; d[j + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  requestAnimationFrame(render);
+}
+function fitCanvas() {
+  const maxW = window.innerWidth - 32, maxH = window.innerHeight - 80;
+  let s = Math.min(maxW / W, maxH / H);
+  if (s >= 2) s = Math.floor(s);
+  s = Math.max(s, 0.5);
+  cv.style.width = (W * s) + 'px'; cv.style.height = (H * s) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+
+/* ---------- Zeit: 50-Hz-Takt wie beim PAL-Amiga ---------- */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let clock = performance.now();
+async function waitUntil(t) { const d = t - performance.now(); if (d > 0) await sleep(d); }
+function resetClock() { clock = performance.now(); }
+async function tick(ms = 20) {            // gleichmäßiger Takt, holt Verzug nicht endlos nach
+  clock = Math.max(clock + ms, performance.now() - 40);
+  await waitUntil(clock);
+}
+
+/* ---------- Eingabe: STICK(1), STRIG(1), INKEY$ ---------- */
+const held = { left: false, right: false, fire: false };
+const touch = { left: false, right: false, fire: false };
+let keyBuf = [];
+let textMode = null;                       // aktive Texteingabe (INPUT / FORM INPUT)
+// kurze Tastendrücke werden bis zur nächsten Abfrage gemerkt
+const latch = { left: false, right: false, fire: false };
+function stick() {
+  const l = held.left || touch.left || latch.left, r = held.right || touch.right || latch.right;
+  latch.left = latch.right = false;
+  return (l ? 4 : 0) | (r ? 8 : 0);
+}
+function strig() { const v = held.fire || touch.fire || latch.fire; latch.fire = false; return v; }
+const clearInput = () => { held.fire = touch.fire = false; latch.left = latch.right = latch.fire = false; keyBuf = []; };
+function inkey() { return keyBuf.length ? keyBuf.shift() : ''; }
+const KEYMAP = { ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right',
+  ' ': 'fire', ArrowUp: 'fire', Enter: 'fire', w: 'fire', W: 'fire' };
+window.addEventListener('keydown', e => {
+  if (textMode) { textMode(e); return; }
+  const k = KEYMAP[e.key];
+  if (k) { if (!e.repeat) latch[k] = true; held[k] = true; e.preventDefault(); }
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) keyBuf.push(e.key);
+  else if (e.key === 'Enter') keyBuf.push('\r');
+  if (keyBuf.length > 16) keyBuf.shift();
+});
+window.addEventListener('keyup', e => { const k = KEYMAP[e.key]; if (k) held[k] = false; });
+window.addEventListener('blur', () => { held.left = held.right = held.fire = false; });
+const textInp = document.getElementById('textinput');
+function touchZone(e) {
+  const r = cv.getBoundingClientRect();
+  const fx = (e.clientX - r.left) / r.width;
+  return fx < 0.33 ? 'left' : fx > 0.67 ? 'right' : 'fire';
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (textMode) { textInp.focus(); return; }
+  const z = touchZone(e);
+  touch.left = touch.right = touch.fire = false; touch[z] = true; latch[z] = true;
+  cv.setPointerCapture(e.pointerId);
+});
+const release = () => { touch.left = touch.right = touch.fire = false; };
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+
+// Texteingabe an der Cursorposition (Tastatur direkt, Touch über unsichtbares Feld)
+const clean = s => s.replace(/[^\x20-\x7e\xa0-\xff]/g, '');
+function readLine(maxlen, filter = () => true) {
+  return new Promise(resolve => {
+    const x = (curCol - 1) * 8, y = (curRow - 1) * 8 + 6;
+    let buf = '', blink = true;
+    textInp.value = ''; textInp.maxLength = maxlen;
+    const redraw = () => {
+      pbox(x, y - 6, x + (maxlen + 1) * 8 - 1, y + 1, 0);
+      text(x, y, buf);
+      if (blink) pbox(x + buf.length * 8, y - 6, x + buf.length * 8 + 7, y + 1, pen);
+    };
+    const timer = setInterval(() => { blink = !blink; redraw(); }, 400);
+    const finish = () => {
+      clearInterval(timer); textMode = null; blink = false; redraw();
+      textInp.removeEventListener('input', onInput); textInp.blur();
+      clearInput();
+      curCol = 1; curRow++;
+      resolve(buf);
+    };
+    const onInput = () => { buf = clean(textInp.value).split('').filter(filter).join('').slice(0, maxlen); blink = true; redraw(); };
+    textMode = e => {
+      if (e.isComposing) return;
+      if (e.key === 'Enter') { e.preventDefault(); finish(); return; }
+      if (e.target === textInp) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'Backspace') { e.preventDefault(); buf = buf.slice(0, -1); }
+      else if (e.key.length === 1 && clean(e.key) && filter(e.key) && buf.length < maxlen) { e.preventDefault(); buf += e.key; }
+      else return;
+      blink = true; redraw();
+    };
+    textInp.addEventListener('input', onInput);
+    textInp.focus();
+    redraw();
+  });
+}
+
+/* =====================================================================
+   Daten aus dem Original
+   ===================================================================== */
+// Blockgrafik aus dem INLINE-Maschinencode (4 Bitplanes je Farbe, oberste Zeile leer)
+const BLOCKS = [
+  ['00000000','00000000','00000000','00000000','00000000','00000000','00000000','00000000'],
+  ['00000000','44444443','44444433','44222233','44222233','44222233','43333333','33333333'],
+  ['00000000','aaaaaaa9','aaaaaa99','aa888899','aa888899','aa888899','a9999999','99999999'],
+  ['00000000','77777776','77777766','77555566','77555566','77555566','76666666','66666666'],
+  ['00000000','8888888f','888888ff','88eeeeff','88eeeeff','88eeeeff','8fffffff','ffffffff'],
+].map(rows => rows.map(r => [...r].map(h => parseInt(h, 16))));
+
+// DATA tetris: Figur, Drehung, x, y – die Figuren bilden den Schriftzug „TETRIS“
+const DATA_TETRIS = [2,0,1,1, 8,0,0,0, 8,0,4,4, 3,1,4,1, 8,0,4,0, 8,1,9,2, 3,2,8,0,
+  4,0,12,2, 1,0,15,4, 9,3,14,1, 5,3,12,0, 2,0,17,1, 1,0,17,0,
+  5,1,19,3, 4,3,19,1, 8,0,19,0];
+// DATA figuren: Anzahl, dann je Figur: Drehungen, Quadrate; je Drehung: x-, y-Ausmaß, Koordinaten, 255
+const DATA_FIGUREN = [11,
+  1,4, 2,2, 0,0,1,0,0,1,1,1,255,
+  1,1, 1,1,0,0,255,
+  2,4, 1,4, 0,0,0,1,0,2,0,3,255, 4,1, 0,0,1,0,2,0,3,0,255,
+  4,4, 3,2, 1,0,0,1,1,1,2,1,255, 2,3, 0,0,0,1,1,1,0,2,255, 3,2, 0,0,1,0,2,0,1,1,255, 2,3, 1,0,0,1,1,1,1,2,255,
+  4,4, 2,3, 0,0,1,0,0,1,0,2,255, 3,2, 0,0,1,0,2,0,2,1,255, 2,3, 1,0,1,1,0,2,1,2,255, 3,2, 0,0,0,1,1,1,2,1,255,
+  4,4, 2,3, 0,0,1,0,1,1,1,2,255, 3,2, 2,0,0,1,1,1,2,1,255, 2,3, 0,0,0,1,0,2,1,2,255, 3,2, 0,0,1,0,2,0,0,1,255,
+  2,4, 3,2, 0,0,1,0,1,1,2,1,255, 2,3, 1,0,0,1,1,1,0,2,255,
+  2,4, 3,2, 1,0,2,0,0,1,1,1,255, 2,3, 0,0,0,1,1,1,1,2,255,
+  2,3, 3,1, 0,0,1,0,2,0,255, 1,3, 0,0,0,1,0,2,255,
+  4,3, 3,2, 1,0,0,1,2,1,255, 2,3, 0,0,1,1,0,2,255, 3,2, 0,0,1,1,2,0,255, 2,3, 1,0,0,1,1,2,255,
+  1,4, 3,3, 1,0,0,1,2,1,1,2,255];
+// Füllmuster für DEFFILL 3,2,23 (Nachbildung)
+const PATTERN = [0x88, 0x55, 0x22, 0x55, 0x88, 0x55, 0x22, 0x55];
+
+/* =====================================================================
+   Variablen
+   ===================================================================== */
+const br = 12, he = 27, xp = 12;
+let FIG = [];                     // FIG[n] = { rot, q, rots: [{xe, ye, cells:[[dx,dy],...]}] }
+let field = [];                   // field[x][y]
+let high$ = [], high = [];
+let score = 0, sh = 0, pa = 0;
+let x = 1, y = 0, f = 0, col = 1, rot = 1, q = 0, w = 0, cur = null;
+
+/* =====================================================================
+   Prozeduren
+   ===================================================================== */
+function varinit() {
+  let p = 0; const rd = () => DATA_FIGUREN[p++];
+  const a = rd();
+  FIG = [];
+  for (let n = 0; n < a; n++) {
+    const r = rd(), cnt = rd(), rots = [];
+    for (let b = 0; b < r; b++) {
+      const xe = rd(), ye = rd(), cells = [];
+      for (let i = 0; i < cnt; i++) cells.push([rd(), rd()]);
+      rd();                                  // 255
+      rots.push({ xe, ye, cells });
+    }
+    FIG.push({ rot: r, q: cnt * 2, rots });
+  }
+  loadHigh();
+}
+function loadHigh() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem('tetris1989.TetrisH.dat')); } catch (_) {}
+  if (!Array.isArray(data) || data.length !== 10) {
+    data = Array.from({ length: 10 }, (_, n) => ['EAGLE SOFT', (10 - n) * 1000]);
+  }
+  high$ = data.map(d => String(d[0])); high = data.map(d => d[1] | 0);
+}
+function saveHigh() {
+  try { localStorage.setItem('tetris1989.TetrisH.dat', JSON.stringify(high$.map((s, i) => [s, high[i]]))); } catch (_) {}
+}
+
+function colinit() {
+  const C = [[0,0,0,9],[1,15,15,15],[2,7,7,15],[3,0,0,14],[4,11,11,15],[5,2,13,3],[6,0,9,0],[7,10,14,9],
+    [8,15,6,10],[9,12,0,8],[10,15,9,14],[11,13,13,0],[12,12,11,0],[13,15,15,0],[14,13,4,0],[15,10,2,0],
+    [16,12,12,12],[17,15,15,15],[18,7,7,7],[19,6,0,6],[20,8,0,8],[21,10,0,10],[22,12,0,12]];
+  for (const [i, r, g, b] of C) setcolor(i, r, g, b);
+}
+
+// PROCEDURE figure – Nachbildung der INLINE-Routine (x in 8er-Spalten, y in Pixeln)
+function figure(xc, yp, farbe, r) {
+  const pat = BLOCKS[farbe];
+  for (const [dx, dy] of r.cells) {
+    const bx = (xc + dx) * 8, by = yp + dy * 8;
+    for (let j = 0; j < 8; j++) {
+      const py = by + j; if (py < 0 || py >= H) continue;
+      for (let i = 0; i < 8; i++) {
+        const px = bx + i; if (px < 0 || px >= W) continue;
+        const o = py * W + px;
+        fb[o] = (fb[o] & 16) | pat[j][i];   // Bitplane 5 bleibt unberührt
+      }
+    }
+  }
+  dirty = true;
+}
+
+async function vorspann() {
+  setcolor(0, 0, 0, 0);
+  clearw();
+  for (let n = 0; n < 16; n++) {
+    const [nr, wr, xx, yy] = DATA_TETRIS.slice(n * 4, n * 4 + 4);
+    setcolor(1, 15, 15, 15);
+    const r = FIG[nr].rots[wr];
+    const fc = rnd(3) + 1;
+    resetClock();
+    for (let yi = 1; yi <= (yy + 1) * 8 + 48; yi++) {
+      await tick();                          // Routine wartet auf den Rasterstrahl
+      figure(xx + 9, yi, fc, r);
+    }
+  }
+  const a = 'Copyright (C) 1989 by MH';
+  pen = 1;
+  for (let n = 1; n <= a.length; n++) {
+    let k = 0;
+    for (let ax = 320; ax >= n * 8 + 56; ax -= 4) {
+      text(ax, 136, a[n - 1] + ' ');
+      if (++k % 12 === 0) await tick();
+    }
+  }
+  pen = 2;
+  text(88, 248, 'PRESS FIRE TO PLAY');
+  await schmelze();
+}
+
+async function playfield() {
+  setcolor(0, 0, 0, 9);
+  pa = 0;
+  while (pa < 1 || pa > 10) {
+    clearw();
+    locate(7, 14);
+    pen = 1;
+    print('Geschwindigkeit:(1-10)? ', false);
+    pa = parseInt(await readLine(3, ch => /[0-9]/.test(ch)), 10) || 0;
+  }
+  clearw();
+  pbox(0, 0, 320, 256, 3, PATTERN);          // DEFFILL 3,2,23 : PBOX 0,0,320,256
+  for (let n = 0; n < he; n++) { block(xp, n); block(xp + br + 1, n); }
+  for (let n = xp; n <= xp + br + 1; n++) block(n, he);
+  pen = 0;
+  pbox(xp * 8 + 8, 0, (xp + br) * 8 + 7, he * 8 - 1, 0);
+  locate(4, 8);
+  rahmen(8, 53, 70, 40);
+  print('SCORE');
+  pen = 1;
+  text(20, 81, '000000');
+  rahmen(8, 140, 70, 40);
+  text(28, 157, 'HIGH');
+  text(20, 167, zahl(high[0]));
+  rahmen(222, 35, 90, 160);
+  printAt(32, 6, 'FIRE');
+  printAt(31, 7, 'ROTATE');
+  printAt(30, 11, 'JOY RIGHT');
+  printAt(32, 12, 'RIGHT');
+  printAt(30, 16, 'JOY LEFT');
+  printAt(32, 17, 'LEFT');
+  printAt(33, 21, '`P`');
+  printAt(32, 22, 'PAUSE');
+}
+
+function block(bx, by) {
+  bx *= 8; by *= 8;
+  pbox(bx, by, bx + 7, by + 7, 16);
+  draw(17, bx, by + 7, bx, by, bx + 7, by);
+  draw(18, bx, by + 7, bx + 7, by + 7, bx + 7, by);
+}
+
+function rahmen(rx, ry, b, h) {
+  let fc = 19, st = 1;
+  prbox(rx, ry, b + rx, h + ry, 0);
+  for (let n = 0; n <= 6; n++) {
+    prbox(rx + n, ry + n, rx + b - n, ry + h - n, fc);
+    fc += st;
+    if (fc === 22 || fc === 19) st = -st;
+  }
+  prbox(rx + 6, ry + 6, rx + b - 6, ry + h - 6, 0);
+  pen = 1;
+}
+
+// FUNCTION test(offx,offy) – TRUE, wenn die Figur dort anstößt
+function test(offx, offy) {
+  if (cur.xe + x > br + 1) x = br - cur.xe + 1;
+  for (const [dx, dy] of cur.cells) {
+    const fx = x + dx + offx - 1, fy = (y >> 3) + dy + offy;
+    if (fx < 0 || fx >= br || fy < 0 || fy > he) return true;
+    if (field[fx][fy] === 1) return true;
+  }
+  return false;
+}
+
+async function game() {
+  score = 0; sh = 0;
+  clearInput();
+  const stepMs = 20 + (pa - 1) * 20 / 9;   // Warteschleife „FOR wa|=1 TO pa|“ + Rasterstrahl
+  for (;;) {
+    y = 0;
+    f = rnd(11);
+    if (f === 10) {                          // das Kreuz wird hier immer neu ausgelost
+      f = rnd(10);
+      if (++sh === 3) sh = 0;
+    }
+    x = rnd(br) + 1;
+    col = rnd(4) + 1;
+    rot = FIG[f].rot;
+    q = FIG[f].q;
+    cur = FIG[f].rots[0];
+    w = 0;
+    if (test(0, 0)) {
+      x = 1;
+      let f1 = false;
+      for (let b = 0; b <= br - cur.xe - 1; b++) {
+        if (!f1 && !test(b, 0)) { x = b + 1; f1 = true; }
+      }
+    }
+    if (test(0, 0)) break;
+    resetClock();
+    for (;;) {
+      const k = inkey();
+      if (k.toUpperCase() === 'P') {
+        clearInput();
+        while (inkey() === '') await sleep(30);
+        resetClock();
+      }
+      if (test(0, 1)) break;
+      for (let n = 1; n <= 8; n++) {
+        await tick(stepMs);
+        figure(x + xp, y, col, cur);
+        y++;
+      }
+      const s = stick();
+      if (s === 4 && x > 1 && !test(-1, 0)) { figure(x + xp, y, 0, cur); x--; }
+      if (s === 8 && x + cur.xe < br + 1 && !test(1, 0)) { figure(x + xp, y, 0, cur); x++; }
+      if (strig()) {
+        figure(x + xp, y, 0, cur);
+        w = (w + 1) % rot;
+        const b = cur;
+        cur = FIG[f].rots[w];
+        if (test(0, 0)) cur = b;
+      }
+    }
+    score += 10;
+    for (const [dx, dy] of cur.cells) field[x + dx - 1][(y >> 3) + dy] = 1;
+    figure(x + xp, y, col, cur);
+    for (let n = he - 1; n >= 0; n--) {
+      let full = true;
+      for (let fx = 0; fx < br; fx++) if (field[fx][n] === 0) full = false;
+      if (full) {
+        score += 100;
+        for (let b = 1; b <= 8; b++) {
+          scroll(0, 1, xp * 8 + 8, 0, (xp + br) * 8 + 7, n * 8 + 7);
+          if (b % 2 === 0) await tick();
+        }
+        for (let b = n; b >= 1; b--) for (let fx = 0; fx < br; fx++) field[fx][b] = field[fx][b - 1];
+        for (let fx = 0; fx < br; fx++) field[fx][0] = 0;
+        n++;
+      }
+    }
+    pen = 1;
+    text(20, 81, zahl(score));
+  }
+  // AUS
+  pen = 1;
+  let n;
+  for (n = he / 2 | 0; n <= (he / 2 | 0) + 2; n++) { locate(xp + 2, n); print(' '.repeat(br)); }
+  locate(xp + 2, n - 2);
+  print('    ENDE');
+  await schmelze();
+  if (score > high[9]) {
+    let pos = 0;
+    for (let i = 0; i <= 9; i++) if (score >= high[i]) { pos = i; break; }
+    high.splice(pos, 0, score); high.length = 10;          // INSERT high%(pos)=score
+    clearw();
+    pen = 1;
+    locate(9, 13);
+    print('Your Name:', false);
+    let a = await readLine(10);
+    if (a === '') a = 'Mr.X';
+    high$.splice(pos, 0, a); high$.length = 10;            // INSERT high$(pos)=a$
+    saveHigh();
+  }
+  hightab();
+  await sleep(2000);                         // DELAY 2
+  await schmelze();
+}
+
+async function schmelze() {
+  await sleep(2000);                         // DELAY 2
+  clearInput();
+  resetClock();
+  for (;;) {
+    for (let k = 0; k < 12; k++) {           // mehrere Durchläufe je 50-Hz-Takt (Blitter war schnell)
+      const sx = rnd(40), sy = rnd(32);
+      const r = Math.random() > 0.5 ? 1 : -1;
+      for (let n = 1; n <= 8; n++) {
+        scroll(r, 0, 0, sy * 8, 320, sy * 8 + 7);
+        scroll(0, r, sx * 8, 0, sx * 8 + 7, 256);
+      }
+    }
+    await tick();
+    if (strig()) break;
+  }
+  clearInput();
+}
+
+function hightab() {
+  clearw();
+  setcolor(0, 0, 0, 0);
+  pen = 1;
+  printAt(13, 4, 'TODAY`S TOP TEN');
+  for (let n = 0; n <= 9; n++) {
+    locate(9, n * 2 + 6);
+    const name = high$[n].slice(0, 16);
+    print(name + '.'.repeat(Math.max(0, 16 - name.length)) + zahl(high[n]));
+  }
+}
+
+function zahl(z) { const b = String(z); return ('000000' + b).slice(-Math.max(6, b.length)); }
+
+async function again() {
+  clearw();
+  pen = 1;
+  printAt(14, 13, 'AGAIN (Y/N)');
+  keyBuf = [];
+  let a = '';
+  while (a === '') {
+    a = inkey();
+    if (!a && touch.fire) { a = 'Y'; release(); }
+    await sleep(30);
+  }
+  return a.toUpperCase() === 'Y';
+}
+
+function fieldinit() {
+  field = Array.from({ length: br }, () => new Array(he + 1).fill(0));
+  for (let n = 0; n < br; n++) field[n][he] = 1;
+}
+
+const rnd = n => Math.floor(Math.random() * n);
+
+/* ---------- Hauptprogramm ---------- */
+async function main() {
+  try { await Promise.race([document.fonts.load(FONT, 'A'), sleep(3000)]); } catch (_) {}
+  if (!document.fonts.check(FONT, 'A')) FONT = 'bold 8px monospace';
+  calibrateFont();
+  fitCanvas();
+  requestAnimationFrame(render);
+  varinit();
+  for (;;) {
+    colinit();
+    clearw();
+    await vorspann();
+    let more;
+    do {
+      fieldinit();
+      await playfield();
+      await game();
+      more = await again();
+    } while (more);
+  }
+}
+main();
+</script>
+</body>
+</html>
